@@ -156,7 +156,11 @@ class mDNSPlugin : Plugin() {
                         s.hosts.forEach { hosts.put(it) }
                         put("hosts", hosts)
                         put("port", s.port)
-                        // TXT not available via NSD -> omitted on Android
+                        s.txt?.let { txtMap ->
+                            val txtObj = JSObject()
+                            txtMap.forEach { (k, v) -> txtObj.put(k, v) }
+                            put("txt", txtObj)
+                        }
                     }
                 })
                 call.resolve(jsResultDiscover(false, null, arr))

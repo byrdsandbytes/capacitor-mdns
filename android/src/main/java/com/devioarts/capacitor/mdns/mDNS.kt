@@ -42,7 +42,8 @@ class mDNS(
         val name: String,
         val type: String,
         val hosts: List<String>, // numeric addresses (v4/v6)
-        val port: Int
+        val port: Int,
+        val txt: Map<String, String>? = null
     )
 
     private class RegistrationSession(
@@ -372,7 +373,14 @@ class mDNS(
             name = s.serviceName,
             type = s.serviceType,
             hosts = hostAddresses(s),
-            port = s.port
+            port = s.port,
+            txt = try {
+                s.attributes?.mapValues { (key, value) ->
+                    value?.let { String(it, Charsets.UTF_8) } ?: ""
+                }
+            } catch (e: Exception) {
+                null
+            }
         )
 
     private fun hostAddresses(s: NsdServiceInfo): List<String> =
