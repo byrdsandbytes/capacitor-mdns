@@ -155,6 +155,7 @@ class mDNSPlugin : Plugin() {
                         val hosts = JSONArray()
                         s.hosts.forEach { hosts.put(it) }
                         put("hosts", hosts)
+                        s.hostname?.let { put("hostname", it) }
                         put("port", s.port)
                         s.txt?.let { txtMap ->
                             val txtObj = JSObject()

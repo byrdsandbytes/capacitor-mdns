@@ -56,6 +56,11 @@ export interface MdnsService {
   hosts: string[];
 
   /**
+   * The host name, e.g. `"my-device.local."`.
+   */
+  hostname?: string;
+
+  /**
    * TXT dictionary (key → value). Usually present on iOS; Android NSD does not populate this.
    * @remarks Not all services publish TXT data.
    */

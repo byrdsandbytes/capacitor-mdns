@@ -238,6 +238,7 @@ public class MDNS: NSObject {
                 "domain": box.domain,
                 "port": box.port
             ]
+            if let hn = box.hostname { entry["hostname"] = hn }
             if !box.hosts.isEmpty { entry["hosts"] = box.hosts }
             if !box.txt.isEmpty { entry["txt"] = box.txt }
             out.append(entry)
@@ -377,6 +378,7 @@ extension MDNS: NetServiceDelegate {
         guard let box = resolveMap[sender] else { return }
         box.port = Int(sender.port)
         box.hosts = parseHosts(sender.addresses)
+        box.hostname = sender.hostName
         if let txtData = sender.txtRecordData() {
             let dict = NetService.dictionary(fromTXTRecord: txtData)
             box.txt = dict.reduce(into: [:]) { acc, e in
@@ -453,6 +455,7 @@ private final class ServiceBox: Hashable {
 
     var port: Int = 0
     var hosts: [String] = []
+    var hostname: String?
     var txt: [String: String] = [:]
     var resolved: Bool = false
 

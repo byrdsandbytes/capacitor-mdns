@@ -42,6 +42,7 @@ class mDNS(
         val name: String,
         val type: String,
         val hosts: List<String>, // numeric addresses (v4/v6)
+        val hostname: String?,
         val port: Int,
         val txt: Map<String, String>? = null
     )
@@ -373,6 +374,7 @@ class mDNS(
             name = s.serviceName,
             type = s.serviceType,
             hosts = hostAddresses(s),
+            hostname = hostName(s),
             port = s.port,
             txt = try {
                 s.attributes?.mapValues { (key, value) ->
@@ -392,4 +394,7 @@ class mDNS(
 
     @Suppress("DEPRECATION")
     private fun legacyHostAddress(s: NsdServiceInfo): String? = s.host?.hostAddress
+    
+    @Suppress("DEPRECATION")
+    private fun hostName(s: NsdServiceInfo): String? = s.host?.hostName
 }
