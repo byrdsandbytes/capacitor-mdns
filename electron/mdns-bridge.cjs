@@ -3,9 +3,14 @@
 //   const { createMDNSAPI } = require('.../electron/mdns-bridge.cjs')
 //   contextBridge.exposeInMainWorld('mDNS', createMDNSAPI({ ipcRenderer }))
 //   contextBridge.exposeInMainWorld('mdns', createMDNSAPI({ ipcRenderer })) // alias
-// eslint-disable-next-line no-undef
 module.exports.createMDNSAPI = ({ ipcRenderer }) => {
   return {
+    /**
+     * Return the platform implementation that handled this call.
+     * @returns {Promise<{platform: 'electron'}>}
+     */
+    getPluginPlatform: () => ipcRenderer.invoke('mdns:getPluginPlatform'),
+
     /**
      * Start advertising a Bonjour/mDNS service.
      * @param {{type?: string, name: string, port: number, txt?: Record<string,string>}} options
@@ -21,8 +26,8 @@ module.exports.createMDNSAPI = ({ ipcRenderer }) => {
 
     /**
      * Discover services of a given type, optional normalized exact/prefix name filter.
-     * @param {{type?: string, id?: string, timeoutMs?: number}} [options]
-     * @returns {Promise<{services: Array<{name:string,type:string,domain:string,port:number,hosts?:string[],txt?:Record<string,string>}>}>}
+     * @param {{type?: string, name?: string, timeout?: number}} [options]
+     * @returns {Promise<{error:boolean,errorMessage:string|null,servicesFound:number,services: Array<{name:string,type:string,domain:string,port:number,hosts:string[],txt?:Record<string,string>}>}>}
      */
     discover: (options) => ipcRenderer.invoke('mdns:discover', options),
   }
