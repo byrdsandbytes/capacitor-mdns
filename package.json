@@ -1,6 +1,6 @@
 {
   "name": "@byrds/capacitor-mdns",
-  "version": "0.1.1",
+  "version": "0.1.6",
   "description": "mDNS plugin for CapacitorJS",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",
@@ -40,7 +40,7 @@
     "ios/Sources",
     "ios/Tests",
     "Package.swift",
-    "DevioartsCapacitorMdns.podspec"
+    "ByrdsCapacitorMdns.podspec"
   ],
   "author": "Andy",
   "license": "MIT",

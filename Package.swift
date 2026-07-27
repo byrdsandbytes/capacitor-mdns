@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "DevioartsCapacitorMdns",
+    name: "ByrdsCapacitorMdns",
     platforms: [.iOS(.v14)],
     products: [
         .library(
-            name: "DevioartsCapacitorMdns",
+            name: "ByrdsCapacitorMdns",
             targets: ["mDNSPlugin"])
     ],
     dependencies: [
