@@ -1,6 +1,6 @@
 {
   "name": "@byrds/capacitor-mdns",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "mDNS plugin for CapacitorJS",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",
