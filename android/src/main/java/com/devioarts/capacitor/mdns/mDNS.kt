@@ -219,17 +219,12 @@ class mDNS(
                     override fun onResolveFailed(s: NsdServiceInfo, errorCode: Int) { /* ignore */ }
 
                     override fun onServiceResolved(s: NsdServiceInfo) {
-                        scope.launch(Dispatchers.IO) {
-                            val mdns = toMdnsService(s)
-                            withContext(Dispatchers.Main.immediate) {
-                                if (result.isCompleted) return@withContext
-                                upsert(mdns)
+                        if (result.isCompleted) return
+                        upsert(toMdnsService(s))
 
-                                // Early-exit for exact/prefix target match.
-                                if (targetName != null && matchesTarget(s.serviceName)) {
-                                    completeWithCurrentResults(discoveryListener)
-                                }
-                            }
+                        // Early-exit for exact/prefix target match.
+                        if (targetName != null && matchesTarget(s.serviceName)) {
+                            completeWithCurrentResults(discoveryListener)
                         }
                     }
                 })
@@ -250,17 +245,12 @@ class mDNS(
                 override fun onServiceLost() { /* no-op */ }
 
                 override fun onServiceUpdated(serviceInfo: NsdServiceInfo) {
-                    scope.launch(Dispatchers.IO) {
-                        val mdns = toMdnsService(serviceInfo)
-                        withContext(Dispatchers.Main.immediate) {
-                            if (result.isCompleted) return@withContext
-                            upsert(mdns)
+                    if (result.isCompleted) return
+                    upsert(toMdnsService(serviceInfo))
 
-                            // Early-exit for exact/prefix target match.
-                            if (targetName != null && matchesTarget(serviceInfo.serviceName)) {
-                                completeWithCurrentResults(discoveryListener)
-                            }
-                        }
+                    // Early-exit for exact/prefix target match.
+                    if (targetName != null && matchesTarget(serviceInfo.serviceName)) {
+                        completeWithCurrentResults(discoveryListener)
                     }
                 }
             }
@@ -405,7 +395,6 @@ class mDNS(
     @Suppress("DEPRECATION")
     private fun legacyHostAddress(s: NsdServiceInfo): String? = s.host?.hostAddress
     
-    // Call on IO thread to avoid NetworkOnMainThreadException
     @Suppress("DEPRECATION")
     private fun hostName(s: NsdServiceInfo): String? = try {
         s.host?.hostName
