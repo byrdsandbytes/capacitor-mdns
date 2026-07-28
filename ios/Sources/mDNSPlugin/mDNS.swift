@@ -270,7 +270,15 @@ public class MDNS: NSObject {
     private func scheduleSettleDebounce(session: UInt64? = nil, _ ms: Int = 350) {
         settleDebounce?.cancel()
         let session = session ?? discoverySession
-        let wi = DispatchWorkItem { [weak self] in self?.finishDiscovery(session: session) }
+        let wi = DispatchWorkItem { [weak self] in
+            guard let self = self, session == self.discoverySession else { return }
+            // Wait until actively resolving candidates are finished (or until hard timeout hits)
+            if self.resolveMap.values.contains(where: { !$0.resolved }) {
+                self.scheduleSettleDebounce(session: session, ms)
+            } else {
+                self.finishDiscovery(session: session)
+            }
+        }
         settleDebounce = wi
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms), execute: wi)
     }
@@ -409,10 +417,16 @@ extension MDNS: NetServiceBrowserDelegate {
 
     public func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
         // Early filter by instance name.
-        guard matchesTarget(service.name) else { return }
+        guard matchesTarget(service.name) else {
+            if !moreComing { scheduleSettleDebounce(session: discoverySession) }
+            return
+        }
 
         let key = keyFor(name: service.name, type: service.type, domain: service.domain)
-        if discovered.contains(where: { $0.identityKey == key }) { return }
+        if discovered.contains(where: { $0.identityKey == key }) {
+            if !moreComing { scheduleSettleDebounce(session: discoverySession) }
+            return
+        }
 
         // Create a dedicated resolver (do not reuse `service` directly).
         let resolver = NetService(domain: service.domain, type: service.type, name: service.name)
