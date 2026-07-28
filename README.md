@@ -186,14 +186,15 @@ Result of discover(). Contains normalized services and error information.
 Normalized description of a discovered Bonjour/mDNS service.
 Returned from {@link mDNSPlugin.discover}.
 
-| Prop         | Type                                        | Description                                                                               |
-| ------------ | ------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| **`name`**   | <code>string</code>                         | Instance name of the service (may be uniqued by the OS, e.g. "My App (2)").               |
-| **`type`**   | <code>string</code>                         | Full service type including the trailing dot, e.g. `"_http._tcp."`.                       |
-| **`domain`** | <code>string</code>                         | Service domain; typically `"local."`.                                                     |
-| **`port`**   | <code>number</code>                         | TCP port the service advertises.                                                          |
-| **`hosts`**  | <code>string[]</code>                       | Resolved numeric IP addresses (IPv4/IPv6).                                                |
-| **`txt`**    | <code><a href="#mdnstxt">MdnsTxt</a></code> | TXT dictionary (key → value). Usually present on iOS; Android NSD does not populate this. |
+| Prop           | Type                                        | Description                                                                               |
+| -------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| **`name`**     | <code>string</code>                         | Instance name of the service (may be uniqued by the OS, e.g. "My App (2)").               |
+| **`type`**     | <code>string</code>                         | Full service type including the trailing dot, e.g. `"_http._tcp."`.                       |
+| **`domain`**   | <code>string</code>                         | Service domain; typically `"local."`.                                                     |
+| **`port`**     | <code>number</code>                         | TCP port the service advertises.                                                          |
+| **`hosts`**    | <code>string[]</code>                       | Resolved numeric IP addresses (IPv4/IPv6).                                                |
+| **`hostname`** | <code>string</code>                         | The host name, e.g. `"my-device.local."`.                                                 |
+| **`txt`**      | <code><a href="#mdnstxt">MdnsTxt</a></code> | TXT dictionary (key → value). Usually present on iOS; Android NSD does not populate this. |
 
 
 #### MdnsDiscoverOptions
@@ -230,8 +231,6 @@ Values are UTF-8 strings; binary payloads are not supported by this API.
 
 Construct a type with a set of properties K of type T
 
-<code>{
- [P in K]: T;
- }</code>
+<code>{ [P in K]: T; }</code>
 
 </docgen-api>
