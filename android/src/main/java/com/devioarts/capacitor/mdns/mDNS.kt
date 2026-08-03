@@ -63,6 +63,9 @@ class mDNS(
     /** Keep strong references to listeners so they outlive registration/discovery. */
     private var activeRegistration: RegistrationSession? = null
     private val discListenerRef = AtomicReference<NsdManager.DiscoveryListener?>(null)
+    
+    /** Persistent listeners for continuous startDiscovery calls, keyed by type */
+    private val continuousListeners = mutableMapOf<String, NsdManager.DiscoveryListener>()
 
     /** Optional external scope (from plugin); otherwise create our own on Main. */
     private val scope = externalScope ?: CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -152,6 +155,97 @@ class mDNS(
     fun stopBroadcast() {
         runOnMain {
             stopActiveRegistration("Publish stopped before completion")
+        }
+    }
+
+    /**
+     * Start continuous discovery for a type. Returns results through the callback rather than returning a Future/Coroutine.
+     * Stays active until stopDiscovery(type) is called.
+     */
+    fun startDiscovery(
+        typeRaw: String,
+        onFound: (MdnsService) -> Unit,
+        onLost: (MdnsService) -> Unit,
+        onError: (Throwable) -> Unit
+    ) {
+        val type = if (typeRaw.endsWith(".")) typeRaw else "$typeRaw."
+
+        // Protect internal maps and NSD calls on the main thread
+        runOnMain {
+            // Already discovering for this type? Stop it first to prevent leaks
+            if (continuousListeners.containsKey(type)) {
+                safeStopDiscovery(continuousListeners[type]!!)
+                continuousListeners.remove(type)
+            }
+            
+            val listener = object : NsdManager.DiscoveryListener {
+                override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                    continuousListeners.remove(type)
+                    onError(IllegalStateException("Discovery failed to start: $errorCode"))
+                }
+
+                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                    continuousListeners.remove(type)
+                }
+
+                override fun onDiscoveryStarted(serviceType: String) {}
+                override fun onDiscoveryStopped(serviceType: String) {
+                    continuousListeners.remove(type)
+                }
+
+                override fun onServiceFound(si: NsdServiceInfo) {
+                    // Similar to timeboxed discover, we need to resolve it or add ServiceInfoCallback
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        try {
+                            val callback = object : NsdManager.ServiceInfoCallback {
+                                override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {}
+                                override fun onServiceInfoCallbackUnregistered() {}
+                                override fun onServiceLost() {}
+
+                                override fun onServiceUpdated(serviceInfo: NsdServiceInfo) {
+                                    onFound(toMdnsService(serviceInfo))
+                                }
+                            }
+                            nsd.registerServiceInfoCallback(si, mainExecutor, callback)
+                        } catch (t: Throwable) {
+                            // Ignored
+                        }
+                    } else {
+                        @Suppress("DEPRECATION")
+                        try {
+                            nsd.resolveService(si, object : NsdManager.ResolveListener {
+                                override fun onResolveFailed(s: NsdServiceInfo, errorCode: Int) {}
+                                override fun onServiceResolved(s: NsdServiceInfo) {
+                                    onFound(toMdnsService(s))
+                                }
+                            })
+                        } catch (t: Throwable) {
+                            // Daemon busy Exception
+                        }
+                    }
+                }
+
+                override fun onServiceLost(si: NsdServiceInfo) {
+                    onLost(toMdnsService(si))
+                }
+            }
+            
+            try {
+                nsd.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, listener)
+                continuousListeners[type] = listener
+            } catch (t: Throwable) {
+                onError(t)
+            }
+        }
+    }
+
+    /**
+     * Stop continuous discovery for a type.
+     */
+    fun stopDiscovery(typeRaw: String) {
+        val type = if (typeRaw.endsWith(".")) typeRaw else "$typeRaw."
+        runOnMain {
+            continuousListeners.remove(type)?.let { safeStopDiscovery(it) }
         }
     }
 
@@ -314,6 +408,9 @@ class mDNS(
         runOnMain {
             stopActiveRegistration("mDNS manager closed before publish completed")
             discListenerRef.getAndSet(null)?.let { safeStopDiscovery(it) }
+            
+            continuousListeners.values.forEach { safeStopDiscovery(it) }
+            continuousListeners.clear()
         }
         if (externalScope == null) scope.cancel()
     }

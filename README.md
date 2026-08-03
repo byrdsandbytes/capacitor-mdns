@@ -44,12 +44,17 @@ Detailed setup lives in:
 
 <docgen-index>
 
-* [`getPluginPlatform()`](#getpluginplatform)
-* [`startBroadcast(...)`](#startbroadcast)
-* [`stopBroadcast()`](#stopbroadcast)
-* [`discover(...)`](#discover)
-* [Interfaces](#interfaces)
-* [Type Aliases](#type-aliases)
+- [`getPluginPlatform()`](#getpluginplatform)
+- [`startBroadcast(...)`](#startbroadcast)
+- [`stopBroadcast()`](#stopbroadcast)
+- [`discover(...)`](#discover)
+- [`startDiscovery(...)`](#startdiscovery)
+- [`stopDiscovery()`](#stopdiscovery)
+- [`addListener('mDNS:ServiceFound', ...)`](#addlistenermdnsservicefound-)
+- [`addListener('mDNS:ServiceLost', ...)`](#addlistenermdnsservicelost-)
+- [`removeAllListeners()`](#removealllisteners)
+- [Interfaces](#interfaces)
+- [Type Aliases](#type-aliases)
 
 </docgen-index>
 
@@ -68,8 +73,7 @@ Return the platform implementation currently serving plugin calls.
 
 **Returns:** <code>Promise&lt;<a href="#mdnspluginplatformresult">MdnsPluginPlatformResult</a>&gt;</code>
 
---------------------
-
+---
 
 ### startBroadcast(...)
 
@@ -85,8 +89,7 @@ Start advertising a Bonjour/mDNS service.
 
 **Returns:** <code>Promise&lt;<a href="#mdnsbroadcastresult">MdnsBroadcastResult</a>&gt;</code>
 
---------------------
-
+---
 
 ### stopBroadcast()
 
@@ -98,8 +101,7 @@ Stop advertising the currently registered service (no-op if none).
 
 **Returns:** <code>Promise&lt;<a href="#mdnsstopresult">MdnsStopResult</a>&gt;</code>
 
---------------------
-
+---
 
 ### discover(...)
 
@@ -115,11 +117,79 @@ Discover services of a given type and optionally filter by instance name.
 
 **Returns:** <code>Promise&lt;<a href="#mdnsdiscoverresult">MdnsDiscoverResult</a>&gt;</code>
 
---------------------
+---
 
+### startDiscovery(...)
+
+```typescript
+startDiscovery(options?: MdnsDiscoverOptions | undefined) => Promise<void>
+```
+
+Start continuous discovery. Emits native `mDNS:ServiceFound` and `mDNS:ServiceLost` events.
+
+| Param         | Type                                                                | Description                                                                           |
+| ------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| **`options`** | <code><a href="#mdnsdiscoveroptions">MdnsDiscoverOptions</a></code> | - {@link <a href="#mdnsdiscoveroptions">MdnsDiscoverOptions</a>} (timeout is ignored) |
+
+---
+
+### stopDiscovery()
+
+```typescript
+stopDiscovery() => Promise<void>
+```
+
+Stop continuous discovery.
+
+---
+
+### addListener('mDNS:ServiceFound', ...)
+
+```typescript
+addListener(eventName: 'mDNS:ServiceFound', listenerFunc: (service: MdnsService) => void) => Promise<PluginListenerHandle>
+```
+
+Add a listener for when a new mDNS service is found during continuous discovery.
+
+| Param              | Type                                                                      |
+| ------------------ | ------------------------------------------------------------------------- |
+| **`eventName`**    | <code>'mDNS:ServiceFound'</code>                                          |
+| **`listenerFunc`** | <code>(service: <a href="#mdnsservice">MdnsService</a>) =&gt; void</code> |
+
+**Returns:** <code>Promise&lt;<a href="#pluginlistenerhandle">PluginListenerHandle</a>&gt;</code>
+
+---
+
+### addListener('mDNS:ServiceLost', ...)
+
+```typescript
+addListener(eventName: 'mDNS:ServiceLost', listenerFunc: (service: Partial<MdnsService>) => void) => Promise<PluginListenerHandle>
+```
+
+Add a listener for when an mDNS service is lost during continuous discovery.
+Note: The `service` payload might contain only partial information (e.g. `name`, `type`, `domain`)
+on some platforms (like Android) when a service is lost.
+
+| Param              | Type                                                                                                            |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| **`eventName`**    | <code>'mDNS:ServiceLost'</code>                                                                                 |
+| **`listenerFunc`** | <code>(service: <a href="#partial">Partial</a>&lt;<a href="#mdnsservice">MdnsService</a>&gt;) =&gt; void</code> |
+
+**Returns:** <code>Promise&lt;<a href="#pluginlistenerhandle">PluginListenerHandle</a>&gt;</code>
+
+---
+
+### removeAllListeners()
+
+```typescript
+removeAllListeners() => Promise<void>
+```
+
+Remove all listeners for this plugin.
+
+---
 
 ### Interfaces
-
 
 #### MdnsPluginPlatformResult
 
@@ -129,7 +199,6 @@ through the expected platform bridge.
 | Prop           | Type                                                              | Description                                        |
 | -------------- | ----------------------------------------------------------------- | -------------------------------------------------- |
 | **`platform`** | <code><a href="#mdnspluginplatform">MdnsPluginPlatform</a></code> | Platform implementation that produced this result. |
-
 
 #### MdnsBroadcastResult
 
@@ -144,7 +213,6 @@ describes the issue.
 | **`name`**         | <code>string</code>         | Final (possibly uniquified) service instance name. Empty on failure. |
 | **`publishing`**   | <code>boolean</code>        | Whether the advertiser is currently active.                          |
 
-
 #### MdnsBroadcastOptions
 
 Options for starting a Bonjour/mDNS advertisement.
@@ -155,7 +223,6 @@ Options for starting a Bonjour/mDNS advertisement.
 | **`name`** | <code>string</code>                         | Service instance name.                        |
 | **`port`** | <code>number</code>                         | TCP port to advertise.                        |
 | **`txt`**  | <code><a href="#mdnstxt">MdnsTxt</a></code> | Optional TXT key–value pairs (UTF-8 strings). |
-
 
 #### MdnsStopResult
 
@@ -168,7 +235,6 @@ after the call (normally false) and includes error information.
 | **`errorMessage`** | <code>string \| null</code> | Error description or null on success.                               |
 | **`publishing`**   | <code>boolean</code>        | Whether the advertiser remains active (should be false on success). |
 
-
 #### MdnsDiscoverResult
 
 Result of discover(). Contains normalized services and error information.
@@ -179,7 +245,6 @@ Result of discover(). Contains normalized services and error information.
 | **`errorMessage`**  | <code>string \| null</code> | Error description or null when no error occurred.                              |
 | **`servicesFound`** | <code>number</code>         | Convenience count equal to services.length.                                    |
 | **`services`**      | <code>MdnsService[]</code>  | Normalized list of discovered services.                                        |
-
 
 #### MdnsService
 
@@ -196,7 +261,6 @@ Returned from {@link mDNSPlugin.discover}.
 | **`hostname`** | <code>string</code>                         | The host name, e.g. `"my-device.local."`.                                                 |
 | **`txt`**      | <code><a href="#mdnstxt">MdnsTxt</a></code> | TXT dictionary (key → value). Usually present on iOS; Android NSD does not populate this. |
 
-
 #### MdnsDiscoverOptions
 
 Options for Bonjour/mDNS discovery.
@@ -208,9 +272,13 @@ Options for Bonjour/mDNS discovery.
 | **`timeout`** | <code>number</code>  | Discovery timeout in milliseconds.                               |
 | **`useNW`**   | <code>boolean</code> | iOS-only hint to use `NWBrowser` instead of `NetServiceBrowser`. |
 
+#### PluginListenerHandle
+
+| Prop         | Type                                      |
+| ------------ | ----------------------------------------- |
+| **`remove`** | <code>() =&gt; Promise&lt;void&gt;</code> |
 
 ### Type Aliases
-
 
 #### MdnsPluginPlatform
 
@@ -218,19 +286,29 @@ Runtime implementation that handled a plugin call.
 
 <code>'ios' | 'android' | 'electron' | 'web'</code>
 
-
 #### MdnsTxt
 
 Key–value map for TXT records of a Bonjour/mDNS service.
 Values are UTF-8 strings; binary payloads are not supported by this API.
 
-<code><a href="#record">Record</a>&lt;string, string&gt;</code>
-
+<code>
+  <a href="#record">Record</a>&lt;string, string&gt;
+</code>
 
 #### Record
 
 Construct a type with a set of properties K of type T
 
-<code>{ [P in K]: T; }</code>
+<code>{
+ [P in K]: T;
+ }</code>
+
+#### Partial
+
+Make all properties in T optional
+
+<code>{
+ [P in keyof T]?: T[P];
+ }</code>
 
 </docgen-api>

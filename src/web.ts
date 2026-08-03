@@ -29,6 +29,8 @@ export class mDNSWeb extends WebPlugin implements mDNSPlugin {
         startBroadcast(o: MdnsBroadcastOptions): Promise<MdnsBroadcastResult>;
         stopBroadcast(): Promise<MdnsStopResult>;
         discover(o?: MdnsDiscoverOptions): Promise<MdnsDiscoverResult>;
+        startDiscovery(o?: MdnsDiscoverOptions): Promise<void>;
+        stopDiscovery(): Promise<void>;
         getPluginPlatform?(): Promise<MdnsPluginPlatformResult>;
       } {
     if (typeof window === 'undefined') return undefined;
@@ -60,5 +62,17 @@ export class mDNSWeb extends WebPlugin implements mDNSPlugin {
     if (api?.discover) return api.discover(options);
     console.log('[WEB_NOT_SUPPORTED] discover', options);
     return { services: [], error: true, errorMessage: this.unsupportedMessage, servicesFound: 0 };
+  }
+
+  async startDiscovery(options: MdnsDiscoverOptions = {}): Promise<void> {
+    const api = this.electronApi;
+    if (api?.startDiscovery) return api.startDiscovery(options);
+    console.log('[WEB_NOT_SUPPORTED] startDiscovery', options);
+  }
+
+  async stopDiscovery(): Promise<void> {
+    const api = this.electronApi;
+    if (api?.stopDiscovery) return api.stopDiscovery();
+    console.log('[WEB_NOT_SUPPORTED] stopDiscovery');
   }
 }

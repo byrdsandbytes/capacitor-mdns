@@ -5,9 +5,7 @@ const { mDNS } = require('../../.tmp/e2e-build/electron/mdns.js');
 const withTimeout = (promise, ms, label) =>
   Promise.race([
     promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
-    ),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
   ]);
 
 async function discoverPublishedService(mdns, type, name) {

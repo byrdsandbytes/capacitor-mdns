@@ -1,4 +1,4 @@
-// src/definitions.ts
+import type { PluginListenerHandle } from '@capacitor/core';
 
 /**
  * Key–value map for TXT records of a Bonjour/mDNS service.
@@ -243,4 +243,39 @@ export interface mDNSPlugin {
    * @remarks The result list is normalized across platforms. On Android, `txt` is typically absent.
    */
   discover(options?: MdnsDiscoverOptions): Promise<MdnsDiscoverResult>;
+
+  /**
+   * Start continuous discovery. Emits native `mDNS:ServiceFound` and `mDNS:ServiceLost` events.
+   *
+   * @param options - {@link MdnsDiscoverOptions} (timeout is ignored)
+   */
+  startDiscovery(options?: MdnsDiscoverOptions): Promise<void>;
+
+  /**
+   * Stop continuous discovery.
+   */
+  stopDiscovery(): Promise<void>;
+
+  /**
+   * Add a listener for when a new mDNS service is found during continuous discovery.
+   */
+  addListener(
+    eventName: 'mDNS:ServiceFound',
+    listenerFunc: (service: MdnsService) => void,
+  ): Promise<PluginListenerHandle>;
+
+  /**
+   * Add a listener for when an mDNS service is lost during continuous discovery.
+   * Note: The `service` payload might contain only partial information (e.g. `name`, `type`, `domain`)
+   * on some platforms (like Android) when a service is lost.
+   */
+  addListener(
+    eventName: 'mDNS:ServiceLost',
+    listenerFunc: (service: Partial<MdnsService>) => void,
+  ): Promise<PluginListenerHandle>;
+
+  /**
+   * Remove all listeners for this plugin.
+   */
+  removeAllListeners(): Promise<void>;
 }

@@ -31,6 +31,7 @@ export class mDNS {
   private readonly stopTimeoutMs = 3000;
   private broadcastQueue: Promise<unknown> = Promise.resolve();
   private destroyed = false;
+  private activeBrowser: Browser | null = null;
 
   //<editor-fold desc="Init/Destroy">
   private ipcRegistered = false;
@@ -73,6 +74,10 @@ export class mDNS {
     this.unregisterIpc();
     await this.withBroadcastLock(async () => {
       await this.stopBroadcastUnlocked();
+      if (this.activeBrowser) {
+        this.safeStopBrowser(this.activeBrowser);
+        this.activeBrowser = null;
+      }
       try {
         this.bonjour.destroy();
       } catch (err) {
@@ -166,6 +171,72 @@ export class mDNS {
    */
   async getPluginPlatform(): Promise<MdnsPluginPlatformResult> {
     return { platform: 'electron' };
+  }
+
+  /**
+   * Starts a continuous discovery and notifies Capacitor events.
+   * @param evt Electron IPC event object (used to get sender WebContents).
+   * @param options See MdnsDiscoverOptions for type/name/timeout.
+   */
+  async startDiscovery(
+    evt: Electron.IpcMainInvokeEvent,
+    options: MdnsDiscoverOptions = {},
+  ): Promise<{ discovering: boolean; error?: boolean; errorMessage?: string }> {
+    const safeOptions = (options ?? {}) as Partial<MdnsDiscoverOptions>;
+    if (this.destroyed) {
+      return { discovering: false, error: true, errorMessage: 'mDNS instance is destroyed' };
+    }
+
+    if (this.activeBrowser) {
+      this.safeStopBrowser(this.activeBrowser);
+      this.activeBrowser = null;
+    }
+
+    const { type, protocol } = this.parseType(safeOptions.type);
+
+    try {
+      this.activeBrowser = this.bonjour.find({ type, protocol });
+
+      this.activeBrowser.on('up', (s) => {
+        const item = {
+          name: s.name || '',
+          type: this.toFullType(type, protocol),
+          domain: 'local.',
+          port: s.port ?? 0,
+          hosts: Array.isArray(s.addresses) ? s.addresses.slice() : [],
+          txt: s.txt && Object.keys(s.txt).length ? this.normalizeTxt(s.txt) : undefined,
+        };
+        evt.sender.send('mDNS:ServiceFound', item);
+      });
+
+      this.activeBrowser.on('down', (s) => {
+        const item = {
+          name: s.name || '',
+          type: this.toFullType(type, protocol),
+          domain: 'local.',
+          port: s.port ?? 0,
+          hosts: Array.isArray(s.addresses) ? s.addresses.slice() : [],
+          txt: s.txt && Object.keys(s.txt).length ? this.normalizeTxt(s.txt) : undefined,
+        };
+        evt.sender.send('mDNS:ServiceLost', item);
+      });
+
+      return { discovering: true };
+    } catch (e: any) {
+      return { discovering: false, error: true, errorMessage: this.toErr(e) };
+    }
+  }
+
+  /**
+   * Stop advertising the continuous discovery.
+   * @returns Result indicating whether the discovery has stopped.
+   */
+  async stopDiscovery(): Promise<{ discovering: boolean }> {
+    if (this.activeBrowser) {
+      this.safeStopBrowser(this.activeBrowser);
+      this.activeBrowser = null;
+    }
+    return { discovering: false };
   }
 
   /**

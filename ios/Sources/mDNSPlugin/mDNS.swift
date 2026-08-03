@@ -31,6 +31,12 @@ public class MDNS: NSObject {
     /// Discovered items (kept for dedup / output).
     private var discovered: [ServiceBox] = []
 
+    /// Continuous discovery callbacks
+    private var continuousFound: (([String: Any]) -> Void)?
+    private var continuousLost: (([String: Any]) -> Void)?
+    private var isContinuous = false
+    private var continuousSeen: Set<String> = []
+
     /// Optional instance-name filter (exact or prefix, both normalized).
     private var targetName: String?
 
@@ -125,6 +131,7 @@ public class MDNS: NSObject {
                 self.finishDiscovery(error: Self.error("Discovery replaced by a new request"))
             }
 
+            self.isContinuous = false
             self.discoverySession &+= 1
             let session = self.discoverySession
             // Reset session state.
@@ -158,6 +165,88 @@ public class MDNS: NSObject {
         }
     }
 
+    /// Start continuous discovery of services of a given type.
+    /// - Parameters:
+    ///   - type: Full service type with trailing dot, e.g. `_http._tcp.`
+    ///   - name: Optional instance-name filter (exact or prefix; both normalized).
+    ///   - useNW: Prefer `NWBrowser` when available (default `true`), fallback to `NetServiceBrowser` otherwise.
+    ///   - onFound: Callback invoked when a service is found.
+    ///   - onLost: Callback invoked when a service is lost.
+    ///   - completion: Callback invoked on start success or error.
+    public func startDiscovery(
+        type: String,
+        name: String?,
+        useNW: Bool = true,
+        onFound: @escaping ([String: Any]) -> Void,
+        onLost: @escaping ([String: Any]) -> Void,
+        completion: @escaping (Error?) -> Void
+    ) {
+        runOnMain { [weak self] in
+            guard let self = self else {
+                completion(Self.error("mDNS manager was released before continuous discovery could start"))
+                return
+            }
+
+            if self.discoverCompletion != nil {
+                self.finishDiscovery(error: Self.error("Discovery replaced by a new continuous request"))
+            }
+
+            self.discoverySession &+= 1
+            let session = self.discoverySession
+            // Reset session state.
+            self.cancelTimers()
+            self.stopBrowsers()
+            self.resolveMap.removeAll()
+            self.discovered.removeAll()
+            self.targetName = name
+            self.discoveryError = nil
+            
+            self.isContinuous = true
+            self.continuousFound = onFound
+            self.continuousLost = onLost
+            self.continuousSeen.removeAll()
+            
+            // Re-use discoverCompletion solely to notify initialization failure
+            self.discoverCompletion = { result in
+                switch result {
+                case .success:
+                    completion(nil)
+                case .failure(let err):
+                    completion(err)
+                }
+            }
+            
+            completion(nil) // Resolve start call immediately
+
+            // Start browsing: NWBrowser preferred when available and requested.
+            #if canImport(Network)
+            if useNW, #available(iOS 12.0, *) {
+                self.startNWBrowse(typeWithDot: type, session: session)
+                return
+            }
+            #endif
+            // Fallback: NetServiceBrowser
+            let b = NetServiceBrowser()
+            b.includesPeerToPeer = true
+            b.delegate = self
+            self.nsBrowser = b
+            // Empty domain discovers in default domains (typically "local.").
+            b.searchForServices(ofType: type, inDomain: "")
+        }
+    }
+
+    /// Stop continuous discovery.
+    public func stopDiscovery() {
+        runOnMain { [weak self] in
+            guard let self = self else { return }
+            self.isContinuous = false
+            self.continuousFound = nil
+            self.continuousLost = nil
+            self.continuousSeen.removeAll()
+            self.finishDiscovery(session: self.discoverySession)
+        }
+    }
+
     // MARK: - Internal: NWBrowser discovery
 
     #if canImport(Network)
@@ -176,16 +265,44 @@ public class MDNS: NSObject {
             switch state {
             case .failed(let err):
                 DispatchQueue.main.async { [weak self] in
-                    self?.finishDiscovery(session: session, error: err)
+                    if self?.isContinuous == true {
+                        self?.discoverCompletion?(.failure(err))
+                    } else {
+                        self?.finishDiscovery(session: session, error: err)
+                    }
                 }
             default:
                 break
             }
         }
 
-        browser.browseResultsChangedHandler = { [weak self] results, _ in
+        browser.browseResultsChangedHandler = { [weak self] results, changes in
             guard let self = self else { return }
             guard session == self.discoverySession, self.discoverCompletion != nil else { return }
+            
+            if self.isContinuous {
+                for change in changes {
+                    if case .removed(let result) = change {
+                        guard case let NWEndpoint.service(name: n, type: t, domain: d, interface: _) = result.endpoint else { continue }
+                        if !self.matchesTarget(n) { continue }
+                        
+                        // We might not have the full resolved info, so just send what we have
+                        let entry: [String: Any] = [
+                            "name": n,
+                            "type": t,
+                            "domain": d
+                        ]
+                        
+                        // Clean up seen keys so it can be discovered again
+                        let searchKey = self.keyFor(name: n, type: t, domain: d)
+                        self.discovered.removeAll { $0.identityKey == searchKey }
+                        self.continuousSeen = self.continuousSeen.filter { !$0.hasPrefix("\(n):") }
+                        
+                        self.continuousLost?(entry)
+                    }
+                }
+            }
+            
             for r in results {
                 guard case let NWEndpoint.service(name: n, type: t, domain: d, interface: _) = r.endpoint else { continue }
                 if !self.matchesTarget(n) { continue }
@@ -203,7 +320,7 @@ public class MDNS: NSObject {
                 let box = ServiceBox(name: n, type: resolver.type, domain: resolver.domain)
                 self.discovered.append(box)
                 self.resolveMap[resolver] = box
-                resolver.resolve(withTimeout: 5.0)
+                resolver.resolve(withTimeout: self.isContinuous ? 15.0 : 5.0)
 
                 // Reschedule short settle window on each new find.
                 self.scheduleSettleDebounce(session: session)
@@ -272,6 +389,16 @@ public class MDNS: NSObject {
         let session = session ?? discoverySession
         let wi = DispatchWorkItem { [weak self] in
             guard let self = self, session == self.discoverySession else { return }
+            
+            if self.isContinuous {
+                // In continuous mode, just flush resolved services
+                self.flushContinuousResolved()
+                if self.resolveMap.values.contains(where: { !$0.resolved }) {
+                    self.scheduleSettleDebounce(session: session, ms)
+                }
+                return
+            }
+            
             // Wait until actively resolving candidates are finished (or until hard timeout hits)
             if self.resolveMap.values.contains(where: { !$0.resolved }) {
                 self.scheduleSettleDebounce(session: session, ms)
@@ -281,6 +408,26 @@ public class MDNS: NSObject {
         }
         settleDebounce = wi
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms), execute: wi)
+    }
+
+    private func flushContinuousResolved() {
+        for box in discovered where box.resolved {
+            let key = "\(box.name):\(box.port):\(box.hosts.first ?? "")"
+            if continuousSeen.contains(key) { continue }
+            continuousSeen.insert(key)
+            
+            var entry: [String: Any] = [
+                "name": box.name,
+                "type": box.type,
+                "domain": box.domain,
+                "port": box.port
+            ]
+            if let hn = box.hostname { entry["hostname"] = hn }
+            if !box.hosts.isEmpty { entry["hosts"] = box.hosts }
+            if !box.txt.isEmpty { entry["txt"] = box.txt }
+            
+            continuousFound?(entry)
+        }
     }
 
     /// Stop any active browsers.
@@ -445,7 +592,22 @@ extension MDNS: NetServiceBrowserDelegate {
     }
 
     public func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
-        // Not critical for snapshot output; ignore.
+        // Not critical for snapshot output, but used for continuous mode.
+        guard browser === nsBrowser else { return }
+        if !matchesTarget(service.name) { return }
+        
+        if isContinuous {
+            let searchKey = keyFor(name: service.name, type: service.type, domain: service.domain)
+            discovered.removeAll { $0.identityKey == searchKey }
+            continuousSeen = continuousSeen.filter { !$0.hasPrefix("\(service.name):") }
+            
+            let entry: [String: Any] = [
+                "name": service.name,
+                "type": service.type,
+                "domain": service.domain.isEmpty ? "local." : service.domain
+            ]
+            continuousLost?(entry)
+        }
     }
 
     public func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {

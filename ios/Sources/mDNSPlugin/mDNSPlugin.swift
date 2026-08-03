@@ -23,7 +23,9 @@ public class mDNSPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getPluginPlatform", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startBroadcast", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopBroadcast", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "discover", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "discover", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "startDiscovery", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopDiscovery", returnType: CAPPluginReturnPromise)
     ]
 
     private let mdns = MDNS()
@@ -130,5 +132,38 @@ public class mDNSPlugin: CAPPlugin, CAPBridgedPlugin {
                 ])
             }
         }
+    }
+    
+    /// startDiscovery({ type?, name? })
+    @objc public func startDiscovery(_ call: CAPPluginCall) {
+        let type = normalizeType(call.getString("type"))
+        let targetName = (call.getString("name")?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+        let useNW = call.getBool("useNW") ?? true
+
+        mdns.startDiscovery(
+            type: type,
+            name: targetName,
+            useNW: useNW,
+            onFound: { [weak self] svc in
+                self?.notifyListeners("mDNS:ServiceFound", data: svc)
+            },
+            onLost: { [weak self] svc in
+                self?.notifyListeners("mDNS:ServiceLost", data: svc)
+            },
+            completion: { [weak self] error in
+                guard self != nil else { return }
+                if let error = error {
+                    call.reject(error.localizedDescription)
+                } else {
+                    call.resolve()
+                }
+            }
+        )
+    }
+
+    /// stopDiscovery()
+    @objc public func stopDiscovery(_ call: CAPPluginCall) {
+        mdns.stopDiscovery()
+        call.resolve()
     }
 }

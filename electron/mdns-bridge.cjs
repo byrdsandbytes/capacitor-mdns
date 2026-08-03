@@ -25,10 +25,23 @@ module.exports.createMDNSAPI = ({ ipcRenderer }) => {
     stopBroadcast: () => ipcRenderer.invoke('mdns:stopBroadcast'),
 
     /**
+     * Start discovering services.
+     * @param {{type?: string}} [options]
+     * @returns {Promise<{discovering: boolean, error?: boolean, errorMessage?: string}>}
+     */
+    startDiscovery: (options) => ipcRenderer.invoke('mdns:startDiscovery', options),
+
+    /**
+     * Stop discovering services.
+     * @returns {Promise<{discovering: boolean}>}
+     */
+    stopDiscovery: () => ipcRenderer.invoke('mdns:stopDiscovery'),
+
+    /**
      * Discover services of a given type, optional normalized exact/prefix name filter.
      * @param {{type?: string, name?: string, timeout?: number}} [options]
      * @returns {Promise<{error:boolean,errorMessage:string|null,servicesFound:number,services: Array<{name:string,type:string,domain:string,port:number,hosts:string[],txt?:Record<string,string>}>}>}
      */
     discover: (options) => ipcRenderer.invoke('mdns:discover', options),
-  }
-}
+  };
+};

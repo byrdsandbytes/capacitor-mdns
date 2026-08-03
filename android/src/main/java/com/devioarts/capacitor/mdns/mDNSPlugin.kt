@@ -80,6 +80,24 @@ class mDNSPlugin : Plugin() {
 
     // ----------------------- API -----------------------
 
+    private fun mdnsServiceToJSObject(s: mDNS.MdnsService): JSObject {
+        return JSObject().apply {
+            put("name", s.name)
+            put("type", s.type)
+            put("domain", "local.")
+            val hosts = JSONArray()
+            s.hosts.forEach { hosts.put(it) }
+            put("hosts", hosts)
+            s.hostname?.let { put("hostname", it) }
+            put("port", s.port)
+            s.txt?.let { txtMap ->
+                val txtObj = JSObject()
+                txtMap.forEach { (k, v) -> txtObj.put(k, v) }
+                put("txt", txtObj)
+            }
+        }
+    }
+
     @PluginMethod
     fun getPluginPlatform(call: PluginCall) {
         call.resolve(JSObject().put("platform", "android"))
@@ -147,27 +165,46 @@ class mDNSPlugin : Plugin() {
         scope.launch {
             try {
                 val list = mdns.discover(type, targetName, timeout)
-                val arr = JSONArray(list.map { s ->
-                    JSObject().apply {
-                        put("name", s.name)
-                        put("type", s.type)         // Android returns full type with dot
-                        put("domain", "local.")     // NSD is mDNS only
-                        val hosts = JSONArray()
-                        s.hosts.forEach { hosts.put(it) }
-                        put("hosts", hosts)
-                        s.hostname?.let { put("hostname", it) }
-                        put("port", s.port)
-                        s.txt?.let { txtMap ->
-                            val txtObj = JSObject()
-                            txtMap.forEach { (k, v) -> txtObj.put(k, v) }
-                            put("txt", txtObj)
-                        }
-                    }
-                })
+                val arr = JSONArray(list.map { mdnsServiceToJSObject(it) })
                 call.resolve(jsResultDiscover(false, null, arr))
             } catch (t: Throwable) {
                 call.resolve(jsResultDiscover(true, toErrorMessage(t), JSONArray()))
             }
+        }
+    }
+
+    /**
+     * Start continuous discovery.
+     */
+    @PluginMethod
+    fun startDiscovery(call: PluginCall) {
+        val type = normalizeType(call.getString("type"))
+        try {
+            mdns.startDiscovery(type, { service ->
+                notifyListeners("mDNS:ServiceFound", mdnsServiceToJSObject(service))
+            }, { service ->
+                notifyListeners("mDNS:ServiceLost", mdnsServiceToJSObject(service))
+            }, { t ->
+                // No bridge mechanism for global error reporting via listeners in this context,
+                // but any exceptions in start will trigger onError. For now we can just log or wrap.
+            })
+            call.resolve()
+        } catch (t: Throwable) {
+            call.reject(toErrorMessage(t))
+        }
+    }
+
+    /**
+     * Stop continuous discovery.
+     */
+    @PluginMethod
+    fun stopDiscovery(call: PluginCall) {
+        val type = normalizeType(call.getString("type"))
+        try {
+            mdns.stopDiscovery(type)
+            call.resolve()
+        } catch (t: Throwable) {
+            call.reject(toErrorMessage(t))
         }
     }
 }

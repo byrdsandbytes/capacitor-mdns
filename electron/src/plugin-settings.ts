@@ -5,7 +5,14 @@
  */
 export const pluginSettings = {
   pluginClass: 'mDNS',
-  pluginMethods: ['getPluginPlatform', 'startBroadcast', 'stopBroadcast', 'discover'] as const,
+  pluginMethods: [
+    'getPluginPlatform',
+    'startBroadcast',
+    'stopBroadcast',
+    'discover',
+    'startDiscovery',
+    'stopDiscovery',
+  ] as const,
   pluginEvents: [] as const,
 } as const;
 
