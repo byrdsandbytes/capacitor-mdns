@@ -23,10 +23,17 @@ public class mDNSPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getPluginPlatform", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startBroadcast", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopBroadcast", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "discover", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "discover", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "watchServices", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopWatching", returnType: CAPPluginReturnPromise)
     ]
 
     private let mdns = MDNS()
+
+    override public func load() {
+        super.load()
+        mdns.watchDelegate = self
+    }
 
     // MARK: - Helpers
 
@@ -130,5 +137,56 @@ public class mDNSPlugin: CAPPlugin, CAPBridgedPlugin {
                 ])
             }
         }
+    }
+
+    /// watchServices({ types: string[] })
+    @objc public func watchServices(_ call: CAPPluginCall) {
+        guard let rawTypes = call.getArray("types", String.self), !rawTypes.isEmpty else {
+            call.resolve([
+                "error": true,
+                "errorMessage": "Missing or empty 'types' array",
+                "watchersStarted": 0
+            ])
+            return
+        }
+
+        let types = rawTypes.map { normalizeType($0) }
+
+        mdns.watchServices(types: types) { result in
+            switch result {
+            case .success(let count):
+                call.resolve([
+                    "error": false,
+                    "errorMessage": NSNull(),
+                    "watchersStarted": count
+                ])
+            case .failure(let err):
+                call.resolve([
+                    "error": true,
+                    "errorMessage": self.jnull(err.localizedDescription),
+                    "watchersStarted": 0
+                ])
+            }
+        }
+    }
+
+    /// stopWatching()
+    @objc public func stopWatching(_ call: CAPPluginCall) {
+        mdns.stopWatching()
+        call.resolve([
+            "publishing": false,
+            "error": false,
+            "errorMessage": NSNull()
+        ])
+    }
+}
+
+extension mDNSPlugin: MDNSWatchDelegate {
+    public func mdns(_ mdns: MDNS, didFindService service: [String: Any]) {
+        notifyListeners("serviceFound", data: ["service": service])
+    }
+
+    public func mdns(_ mdns: MDNS, didLoseService service: [String: Any]) {
+        notifyListeners("serviceLost", data: ["service": service])
     }
 }

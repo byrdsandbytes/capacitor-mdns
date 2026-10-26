@@ -9,6 +9,8 @@ import type {
   MdnsStopResult,
   MdnsDiscoverResult,
   MdnsPluginPlatformResult,
+  MdnsWatchOptions,
+  MdnsWatchResult,
 } from './definitions';
 
 /**
@@ -30,6 +32,8 @@ export class mDNSWeb extends WebPlugin implements mDNSPlugin {
         stopBroadcast(): Promise<MdnsStopResult>;
         discover(o?: MdnsDiscoverOptions): Promise<MdnsDiscoverResult>;
         getPluginPlatform?(): Promise<MdnsPluginPlatformResult>;
+        watchServices?(o: MdnsWatchOptions): Promise<MdnsWatchResult>;
+        stopWatching?(): Promise<MdnsStopResult>;
       } {
     if (typeof window === 'undefined') return undefined;
     return (window as any).mDNS || (window as any).mdns;
@@ -60,5 +64,19 @@ export class mDNSWeb extends WebPlugin implements mDNSPlugin {
     if (api?.discover) return api.discover(options);
     console.log('[WEB_NOT_SUPPORTED] discover', options);
     return { services: [], error: true, errorMessage: this.unsupportedMessage, servicesFound: 0 };
+  }
+
+  async watchServices(options: MdnsWatchOptions): Promise<MdnsWatchResult> {
+    const api = this.electronApi;
+    if (api?.watchServices) return api.watchServices(options);
+    console.log('[WEB_NOT_SUPPORTED] watchServices', options);
+    return { error: true, errorMessage: this.unsupportedMessage, watchersStarted: 0 };
+  }
+
+  async stopWatching(): Promise<MdnsStopResult> {
+    const api = this.electronApi;
+    if (api?.stopWatching) return api.stopWatching();
+    console.log('[WEB_NOT_SUPPORTED] stopWatching');
+    return { publishing: false, error: false, errorMessage: null };
   }
 }

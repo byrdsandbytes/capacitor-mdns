@@ -1,5 +1,7 @@
 // src/definitions.ts
 
+import type { PluginListenerHandle } from '@capacitor/core';
+
 /**
  * Key–value map for TXT records of a Bonjour/mDNS service.
  * Values are UTF-8 strings; binary payloads are not supported by this API.
@@ -192,6 +194,49 @@ export interface MdnsStopResult {
 }
 
 /**
+ * Options for starting continuous service watching.
+ *
+ * @remarks
+ * - Each element in `types` should be a Bonjour service type string (e.g. `"_http._tcp."`).
+ * - The trailing dot is appended automatically if omitted.
+ * - One native browser/listener is started per type; all run concurrently.
+ * - Use {@link mDNSPlugin.stopWatching} to tear down all active watchers.
+ *
+ * @public
+ */
+export interface MdnsWatchOptions {
+  /**
+   * Service types to watch simultaneously.
+   * @example `["_http._tcp.", "_myapp._tcp."]`
+   */
+  types: string[];
+}
+
+/**
+ * Result of watchServices(). Indicates how many watchers were started
+ * and whether an error occurred.
+ * @public
+ */
+export interface MdnsWatchResult {
+  /** True if the operation encountered an error. */
+  error: boolean;
+  /** Error description or null on success. */
+  errorMessage: string | null;
+  /** Number of watchers successfully started. */
+  watchersStarted: number;
+}
+
+/**
+ * Payload emitted by the `serviceFound` and `serviceLost` events
+ * during active service watching.
+ * @public
+ */
+export interface MdnsServiceEvent {
+  /** The service that was discovered or lost. */
+  service: MdnsService;
+}
+
+/**
  * Public API surface of the Capacitor mDNS plugin.
  *
  * @example
@@ -243,4 +288,56 @@ export interface mDNSPlugin {
    * @remarks The result list is normalized across platforms. On Android, `txt` is typically absent.
    */
   discover(options?: MdnsDiscoverOptions): Promise<MdnsDiscoverResult>;
+
+  /**
+   * Start watching for one or more service types continuously.
+   * Services are reported as they appear and disappear via the
+   * `serviceFound` and `serviceLost` events.
+   *
+   * @param options - {@link MdnsWatchOptions}
+   * @returns Promise resolving to `MdnsWatchResult`.
+   *
+   * @remarks
+   * - Calling `watchServices` again replaces any previous watchers.
+   * - Use `addListener('serviceFound', ...)` and `addListener('serviceLost', ...)`
+   *   to receive events.
+   * - Call {@link stopWatching} to stop all active watchers.
+   *
+   * @example
+   * ```ts
+   * await mDNS.watchServices({ types: ['_http._tcp.', '_myapp._tcp.'] });
+   * mDNS.addListener('serviceFound', (event) => console.log('Found:', event.service));
+   * mDNS.addListener('serviceLost', (event) => console.log('Lost:', event.service));
+   * ```
+   */
+  watchServices(options: MdnsWatchOptions): Promise<MdnsWatchResult>;
+
+  /**
+   * Stop all active service watchers started by {@link watchServices}.
+   * Safe to call even when no watchers are active.
+   *
+   * @returns Promise resolving to `MdnsStopResult`.
+   */
+  stopWatching(): Promise<MdnsStopResult>;
+
+  /**
+   * Listen for service discovery events during active watching.
+   *
+   * @param eventName - `'serviceFound'` when a new service is discovered.
+   * @param handler - Callback receiving the {@link MdnsServiceEvent}.
+   */
+  addListener(eventName: 'serviceFound', handler: (event: MdnsServiceEvent) => void): Promise<PluginListenerHandle>;
+
+  /**
+   * Listen for service loss events during active watching.
+   *
+   * @param eventName - `'serviceLost'` when a previously discovered service disappears.
+   * @param handler - Callback receiving the {@link MdnsServiceEvent}.
+   */
+  addListener(eventName: 'serviceLost', handler: (event: MdnsServiceEvent) => void): Promise<PluginListenerHandle>;
+
+  /**
+   * Remove all listeners registered by this plugin.
+   */
+  removeAllListeners(): Promise<void>;
 }

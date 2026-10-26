@@ -38,6 +38,35 @@ class mDNSPlugin : Plugin() {
     override fun load() {
         val ctx = context ?: throw IllegalStateException("No Android context")
         mdns = mDNS(ctx, scope)
+        mdns.watchListener = object : mDNS.WatchListener {
+            override fun onServiceFound(service: mDNS.MdnsService) {
+                val serviceObj = JSObject().apply {
+                    put("name", service.name)
+                    put("type", service.type)
+                    put("domain", "local.")
+                    val hosts = JSONArray()
+                    service.hosts.forEach { hosts.put(it) }
+                    put("hosts", hosts)
+                    service.hostname?.let { put("hostname", it) }
+                    put("port", service.port)
+                    service.txt?.let { txtMap ->
+                        val txtObj = JSObject()
+                        txtMap.forEach { (k, v) -> txtObj.put(k, v) }
+                        put("txt", txtObj)
+                    }
+                }
+                notifyListeners("serviceFound", JSObject().put("service", serviceObj))
+            }
+
+            override fun onServiceLost(name: String, type: String) {
+                val serviceObj = JSObject().apply {
+                    put("name", name)
+                    put("type", type)
+                    put("domain", "local.")
+                }
+                notifyListeners("serviceLost", JSObject().put("service", serviceObj))
+            }
+        }
     }
 
     override fun handleOnDestroy() {
@@ -168,6 +197,59 @@ class mDNSPlugin : Plugin() {
             } catch (t: Throwable) {
                 call.resolve(jsResultDiscover(true, toErrorMessage(t), JSONArray()))
             }
+        }
+    }
+
+    /**
+     * Start watching for multiple service types simultaneously.
+     */
+    @PluginMethod
+    fun watchServices(call: PluginCall) {
+        val types = call.getArray("types")
+        if (types == null || types.length() == 0) {
+            call.resolve(
+                JSObject()
+                    .put("error", true)
+                    .put("errorMessage", "Missing or empty 'types' array")
+                    .put("watchersStarted", 0)
+            )
+            return
+        }
+
+        val typesList = mutableListOf<String>()
+        for (i in 0 until types.length()) {
+            val raw = types.getString(i)
+            if (raw != null) typesList.add(normalizeType(raw))
+        }
+
+        try {
+            val started = mdns.watchServices(typesList)
+            call.resolve(
+                JSObject()
+                    .put("error", false)
+                    .put("errorMessage", JSONObject.NULL)
+                    .put("watchersStarted", started)
+            )
+        } catch (t: Throwable) {
+            call.resolve(
+                JSObject()
+                    .put("error", true)
+                    .put("errorMessage", toErrorMessage(t))
+                    .put("watchersStarted", 0)
+            )
+        }
+    }
+
+    /**
+     * Stop all active service watchers.
+     */
+    @PluginMethod
+    fun stopWatching(call: PluginCall) {
+        try {
+            mdns.stopWatching()
+            call.resolve(jsResultStop(false, null))
+        } catch (t: Throwable) {
+            call.resolve(jsResultStop(true, toErrorMessage(t)))
         }
     }
 }

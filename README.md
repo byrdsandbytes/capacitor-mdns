@@ -16,14 +16,50 @@ npx cap sync
 
 ## Usage
 
+### One-shot Advertising & Discovery
+
 ```ts
 import { mDNS } from '@byrds/capacitor-mdns';
 
 const runtime = await mDNS.getPluginPlatform();
 
+// Start advertising
 await mDNS.startBroadcast({ type: '_http._tcp.', name: 'MyService', port: 9100 });
+
+// Discover services of a given type (timeboxed)
 const result = await mDNS.discover({ type: '_http._tcp.', timeout: 3000 });
+
+// Stop advertising
 await mDNS.stopBroadcast();
+```
+
+### Watching Multiple Services Simultaneously
+
+Use `watchServices` to continuously monitor multiple service types at once with event listeners:
+
+```ts
+import { mDNS } from '@byrds/capacitor-mdns';
+
+// 1. Listen for newly discovered services
+const foundSub = await mDNS.addListener('serviceFound', ({ service }) => {
+  console.log(`Discovered ${service.type}: ${service.name} at ${service.hosts.join(', ')}:${service.port}`);
+});
+
+// 2. Listen for vanished services
+const lostSub = await mDNS.addListener('serviceLost', ({ service }) => {
+  console.log(`Lost service: ${service.name} (${service.type})`);
+});
+
+// 3. Start watching multiple service types at once
+const result = await mDNS.watchServices({
+  types: ['_http._tcp.', '_airplay._tcp.', '_googlecast._tcp.']
+});
+console.log(`Started ${result.watchersStarted} service watchers`);
+
+// 4. When done, stop watching and remove listeners
+await mDNS.stopWatching();
+await foundSub.remove();
+await lostSub.remove();
 ```
 
 ## Platform Setup
@@ -40,6 +76,32 @@ Detailed setup lives in:
 - [Playground](./docs/playground.md)
 - [Runtime behavior](./docs/runtime-behavior.md)
 
+## Publishing to npm
+
+To release and publish a new version of `@byrds/capacitor-mdns` to npm:
+
+1. **Verify checks and linting pass:**
+   ```bash
+   npm run lint
+   npm run build
+   ```
+
+2. **Bump the package version:**
+   ```bash
+   npm version patch   # or minor, major
+   ```
+
+3. **Publish to npm:**
+   ```bash
+   npm run release
+   ```
+   > **Note:** The `release` script executes `npm publish --access public`, which automatically triggers `prepublishOnly` (`npm run build`) to clean, regenerate API documentation via `docgen`, compile TypeScript, and produce the Rollup bundles.
+
+4. **Push commits and tags to remote repository:**
+   ```bash
+   git push && git push --tags
+   ```
+
 ## API
 
 <docgen-index>
@@ -48,6 +110,11 @@ Detailed setup lives in:
 * [`startBroadcast(...)`](#startbroadcast)
 * [`stopBroadcast()`](#stopbroadcast)
 * [`discover(...)`](#discover)
+* [`watchServices(...)`](#watchservices)
+* [`stopWatching()`](#stopwatching)
+* [`addListener('serviceFound', ...)`](#addlistenerservicefound-)
+* [`addListener('serviceLost', ...)`](#addlistenerservicelost-)
+* [`removeAllListeners()`](#removealllisteners)
 * [Interfaces](#interfaces)
 * [Type Aliases](#type-aliases)
 
@@ -114,6 +181,86 @@ Discover services of a given type and optionally filter by instance name.
 | **`options`** | <code><a href="#mdnsdiscoveroptions">MdnsDiscoverOptions</a></code> | - {@link <a href="#mdnsdiscoveroptions">MdnsDiscoverOptions</a>} |
 
 **Returns:** <code>Promise&lt;<a href="#mdnsdiscoverresult">MdnsDiscoverResult</a>&gt;</code>
+
+--------------------
+
+
+### watchServices(...)
+
+```typescript
+watchServices(options: MdnsWatchOptions) => Promise<MdnsWatchResult>
+```
+
+Start watching for one or more service types continuously.
+Services are reported as they appear and disappear via the
+`serviceFound` and `serviceLost` events.
+
+| Param         | Type                                                          | Description                                                |
+| ------------- | ------------------------------------------------------------- | ---------------------------------------------------------- |
+| **`options`** | <code><a href="#mdnswatchoptions">MdnsWatchOptions</a></code> | - {@link <a href="#mdnswatchoptions">MdnsWatchOptions</a>} |
+
+**Returns:** <code>Promise&lt;<a href="#mdnswatchresult">MdnsWatchResult</a>&gt;</code>
+
+--------------------
+
+
+### stopWatching()
+
+```typescript
+stopWatching() => Promise<MdnsStopResult>
+```
+
+Stop all active service watchers started by {@link watchServices}.
+Safe to call even when no watchers are active.
+
+**Returns:** <code>Promise&lt;<a href="#mdnsstopresult">MdnsStopResult</a>&gt;</code>
+
+--------------------
+
+
+### addListener('serviceFound', ...)
+
+```typescript
+addListener(eventName: 'serviceFound', handler: (event: MdnsServiceEvent) => void) => Promise<PluginListenerHandle>
+```
+
+Listen for service discovery events during active watching.
+
+| Param           | Type                                                                              | Description                                                                        |
+| --------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| **`eventName`** | <code>'serviceFound'</code>                                                       | - `'serviceFound'` when a new service is discovered.                               |
+| **`handler`**   | <code>(event: <a href="#mdnsserviceevent">MdnsServiceEvent</a>) =&gt; void</code> | - Callback receiving the {@link <a href="#mdnsserviceevent">MdnsServiceEvent</a>}. |
+
+**Returns:** <code>Promise&lt;<a href="#pluginlistenerhandle">PluginListenerHandle</a>&gt;</code>
+
+--------------------
+
+
+### addListener('serviceLost', ...)
+
+```typescript
+addListener(eventName: 'serviceLost', handler: (event: MdnsServiceEvent) => void) => Promise<PluginListenerHandle>
+```
+
+Listen for service loss events during active watching.
+
+| Param           | Type                                                                              | Description                                                                        |
+| --------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| **`eventName`** | <code>'serviceLost'</code>                                                        | - `'serviceLost'` when a previously discovered service disappears.                 |
+| **`handler`**   | <code>(event: <a href="#mdnsserviceevent">MdnsServiceEvent</a>) =&gt; void</code> | - Callback receiving the {@link <a href="#mdnsserviceevent">MdnsServiceEvent</a>}. |
+
+**Returns:** <code>Promise&lt;<a href="#pluginlistenerhandle">PluginListenerHandle</a>&gt;</code>
+
+--------------------
+
+
+### removeAllListeners()
+
+```typescript
+removeAllListeners() => Promise<void>
+```
+
+Remove all listeners registered by this plugin.
 
 --------------------
 
@@ -207,6 +354,44 @@ Options for Bonjour/mDNS discovery.
 | **`name`**    | <code>string</code>  | Optional instance name filter (prefix-safe).                     |
 | **`timeout`** | <code>number</code>  | Discovery timeout in milliseconds.                               |
 | **`useNW`**   | <code>boolean</code> | iOS-only hint to use `NWBrowser` instead of `NetServiceBrowser`. |
+
+
+#### MdnsWatchResult
+
+Result of watchServices(). Indicates how many watchers were started
+and whether an error occurred.
+
+| Prop                  | Type                        | Description                                 |
+| --------------------- | --------------------------- | ------------------------------------------- |
+| **`error`**           | <code>boolean</code>        | True if the operation encountered an error. |
+| **`errorMessage`**    | <code>string \| null</code> | Error description or null on success.       |
+| **`watchersStarted`** | <code>number</code>         | Number of watchers successfully started.    |
+
+
+#### MdnsWatchOptions
+
+Options for starting continuous service watching.
+
+| Prop        | Type                  | Description                            |
+| ----------- | --------------------- | -------------------------------------- |
+| **`types`** | <code>string[]</code> | Service types to watch simultaneously. |
+
+
+#### PluginListenerHandle
+
+| Prop         | Type                                      |
+| ------------ | ----------------------------------------- |
+| **`remove`** | <code>() =&gt; Promise&lt;void&gt;</code> |
+
+
+#### MdnsServiceEvent
+
+Payload emitted by the `serviceFound` and `serviceLost` events
+during active service watching.
+
+| Prop          | Type                                                | Description                              |
+| ------------- | --------------------------------------------------- | ---------------------------------------- |
+| **`service`** | <code><a href="#mdnsservice">MdnsService</a></code> | The service that was discovered or lost. |
 
 
 ### Type Aliases

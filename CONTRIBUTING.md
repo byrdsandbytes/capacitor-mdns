@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve `@devioarts/capacitor-mdns`.
+Thanks for helping improve `@byrds/capacitor-mdns`.
 
 ## Local Checks
 
@@ -26,3 +26,22 @@ npm run docgen
 ```
 
 Update the JSDoc comments first, then regenerate the README.
+
+## Publishing to npm
+
+To publish a new release:
+
+1. Ensure working directory is clean and all checks pass (`npm run lint`, `npm run build`).
+2. Bump version:
+   ```bash
+   npm version patch # or minor, major
+   ```
+3. Run publish command:
+   ```bash
+   npm run release
+   ```
+   This triggers `npm run build` via `prepublishOnly` and publishes the package with public access.
+4. Push git commit and tags:
+   ```bash
+   git push && git push --tags
+   ```

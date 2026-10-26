@@ -4,6 +4,12 @@ import Darwin
 import Network
 #endif
 
+/// Delegate that receives live service updates during watching.
+public protocol MDNSWatchDelegate: AnyObject {
+    func mdns(_ mdns: MDNS, didFindService service: [String: Any])
+    func mdns(_ mdns: MDNS, didLoseService service: [String: Any])
+}
+
 /// iOS mDNS manager.
 /// - Publishes via `NetService`.
 /// - Discovers via `NWBrowser` (preferred) or `NetServiceBrowser` as a fallback.
@@ -33,6 +39,12 @@ public class MDNS: NSObject {
 
     /// Optional instance-name filter (exact or prefix, both normalized).
     private var targetName: String?
+
+    // MARK: - Watching state
+    public weak var watchDelegate: MDNSWatchDelegate?
+    fileprivate var watchers: [String: TypeWatcher] = [:]  // serviceType -> watcher
+    /// Resolvers spawned by watchers; separate from discovery resolveMap.
+    fileprivate var watchResolveMap: [NetService: (watcher: TypeWatcher, box: ServiceBox)] = [:]
 
     /// Completion invoked once with either success(array) or failure(error).
     private var discoverCompletion: ((Result<[[String: Any]], Error>) -> Void)?
@@ -337,16 +349,16 @@ public class MDNS: NSObject {
     }
 
     /// Build a stable identity key for deduplication.
-    private func keyFor(name: String, type: String, domain: String) -> String {
+    fileprivate func keyFor(name: String, type: String, domain: String) -> String {
         return "\(name)|\(type)|\(domain)"
     }
 
     /// Ensure execution on main queue (NSNetServices expect main run loop).
-    private func runOnMain(_ block: @escaping () -> Void) {
+    fileprivate func runOnMain(_ block: @escaping () -> Void) {
         if Thread.isMainThread { block() } else { DispatchQueue.main.async(execute: block) }
     }
 
-    private static func error(_ message: String) -> NSError {
+    fileprivate static func error(_ message: String) -> NSError {
         return NSError(domain: "mDNS", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }
@@ -383,6 +395,33 @@ extension MDNS: NetServiceDelegate {
 
     // Resolve callbacks
     public func netServiceDidResolveAddress(_ sender: NetService) {
+        if let (watcher, box) = watchResolveMap[sender] {
+            box.port = Int(sender.port)
+            box.hosts = parseHosts(sender.addresses)
+            box.hostname = sender.hostName
+            if let txtData = sender.txtRecordData() {
+                let dict = NetService.dictionary(fromTXTRecord: txtData)
+                box.txt = dict.reduce(into: [:]) { acc, e in
+                    acc[e.key] = String(data: e.value, encoding: .utf8) ?? ""
+                }
+            }
+            box.resolved = true
+            watcher.resolveMap.removeValue(forKey: sender)
+            watchResolveMap.removeValue(forKey: sender)
+
+            var entry: [String: Any] = [
+                "name": box.name,
+                "type": box.type,
+                "domain": box.domain,
+                "port": box.port
+            ]
+            if let hn = box.hostname { entry["hostname"] = hn }
+            if !box.hosts.isEmpty { entry["hosts"] = box.hosts }
+            if !box.txt.isEmpty { entry["txt"] = box.txt }
+            watchDelegate?.mdns(self, didFindService: entry)
+            return
+        }
+
         guard let box = resolveMap[sender] else { return }
         box.port = Int(sender.port)
         box.hosts = parseHosts(sender.addresses)
@@ -405,6 +444,12 @@ extension MDNS: NetServiceDelegate {
     }
 
     public func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+        if let (watcher, _) = watchResolveMap[sender] {
+            watcher.resolveMap.removeValue(forKey: sender)
+            watchResolveMap.removeValue(forKey: sender)
+            return
+        }
+
         // Drop the unresolved service and try to continue with others.
         resolveMap.removeValue(forKey: sender)
         scheduleSettleDebounce(session: discoverySession)
@@ -416,6 +461,23 @@ extension MDNS: NetServiceDelegate {
 extension MDNS: NetServiceBrowserDelegate {
 
     public func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        // Check if this browser belongs to a watcher
+        if let watcher = watchers.values.first(where: { $0.nsBrowser === browser }) {
+            let key = keyFor(name: service.name, type: service.type, domain: service.domain)
+            if watcher.knownServices[key] != nil { return }
+
+            let resolver = NetService(domain: service.domain, type: service.type, name: service.name)
+            resolver.includesPeerToPeer = true
+            resolver.delegate = self
+
+            let box = ServiceBox(name: service.name, type: service.type, domain: service.domain)
+            watcher.knownServices[key] = box
+            watcher.resolveMap[resolver] = box
+            watchResolveMap[resolver] = (watcher: watcher, box: box)
+            resolver.resolve(withTimeout: 5.0)
+            return
+        }
+
         // Early filter by instance name.
         guard matchesTarget(service.name) else {
             if !moreComing { scheduleSettleDebounce(session: discoverySession) }
@@ -445,7 +507,22 @@ extension MDNS: NetServiceBrowserDelegate {
     }
 
     public func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
-        // Not critical for snapshot output; ignore.
+        if let watcher = watchers.values.first(where: { $0.nsBrowser === browser }) {
+            let key = keyFor(name: service.name, type: service.type, domain: service.domain)
+            if let box = watcher.knownServices.removeValue(forKey: key) {
+                var entry: [String: Any] = [
+                    "name": box.name,
+                    "type": box.type,
+                    "domain": box.domain,
+                    "port": box.port
+                ]
+                if let hn = box.hostname { entry["hostname"] = hn }
+                if !box.hosts.isEmpty { entry["hosts"] = box.hosts }
+                if !box.txt.isEmpty { entry["txt"] = box.txt }
+                watchDelegate?.mdns(self, didLoseService: entry)
+            }
+            return
+        }
     }
 
     public func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
@@ -459,7 +536,175 @@ extension MDNS: NetServiceBrowserDelegate {
     }
 }
 
+// MARK: - Watching
+
+extension MDNS {
+
+    /// Start watching for multiple service types. Emits delegate callbacks as services appear/disappear.
+    /// Returns the number of watchers successfully started.
+    public func watchServices(types: [String], completion: @escaping (Result<Int, Error>) -> Void) {
+        runOnMain { [weak self] in
+            guard let self = self else {
+                completion(.failure(Self.error("mDNS manager was released")))
+                return
+            }
+            self.stopAllWatchers()
+
+            var started = 0
+            for rawType in types {
+                var type = rawType.trimmingCharacters(in: .whitespacesAndNewlines)
+                if type.isEmpty { continue }
+                if type.last != "." { type += "." }
+
+                let watcher = TypeWatcher(serviceType: type)
+                self.watchers[type] = watcher
+
+                #if canImport(Network)
+                if #available(iOS 12.0, *) {
+                    self.startWatcherNWBrowse(watcher: watcher)
+                    started += 1
+                    continue
+                }
+                #endif
+
+                let b = NetServiceBrowser()
+                b.includesPeerToPeer = true
+                b.delegate = self
+                watcher.nsBrowser = b
+                b.searchForServices(ofType: type, inDomain: "")
+                started += 1
+            }
+
+            completion(.success(started))
+        }
+    }
+
+    /// Stop all active watchers.
+    public func stopWatching() {
+        runOnMain { [weak self] in
+            self?.stopAllWatchers()
+        }
+    }
+
+    #if canImport(Network)
+    @available(iOS 12.0, *)
+    fileprivate func startWatcherNWBrowse(watcher: TypeWatcher) {
+        let typeNoDot = watcher.serviceType.hasSuffix(".") ? String(watcher.serviceType.dropLast()) : watcher.serviceType
+
+        let params = NWParameters()
+        params.includePeerToPeer = true
+
+        let browser = NWBrowser(for: .bonjour(type: typeNoDot, domain: nil), using: params)
+        watcher.nwBrowser = browser
+
+        browser.stateUpdateHandler = { [weak self] state in
+            if case .failed = state {
+                DispatchQueue.main.async {
+                    self?.watchers.removeValue(forKey: watcher.serviceType)
+                }
+            }
+        }
+
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
+            guard let self = self else { return }
+            self.handleWatcherBrowseResults(results: results, watcher: watcher)
+        }
+
+        browser.start(queue: .main)
+    }
+
+    @available(iOS 12.0, *)
+    private func handleWatcherBrowseResults(results: Set<NWBrowser.Result>, watcher: TypeWatcher) {
+        var currentKeys = Set<String>()
+        for r in results {
+            guard case let NWEndpoint.service(name: n, type: t, domain: d, interface: _) = r.endpoint else { continue }
+            let key = keyFor(name: n, type: t, domain: d)
+            currentKeys.insert(key)
+
+            if watcher.knownServices[key] == nil {
+                resolveNewWatchedService(name: n, type: t, domain: d, key: key, watcher: watcher)
+            }
+        }
+        notifyLostWatchedServices(currentKeys: currentKeys, watcher: watcher)
+    }
+
+    private func resolveNewWatchedService(name: String, type: String, domain: String, key: String, watcher: TypeWatcher) {
+        let resolverType = type.hasSuffix(".") ? type : type + "."
+        let resolverDomain = domain.isEmpty ? "local." : domain
+        let resolver = NetService(domain: resolverDomain, type: resolverType, name: name)
+        resolver.includesPeerToPeer = true
+        resolver.delegate = self
+
+        let box = ServiceBox(name: name, type: resolverType, domain: resolverDomain)
+        watcher.knownServices[key] = box
+        watcher.resolveMap[resolver] = box
+        watchResolveMap[resolver] = (watcher: watcher, box: box)
+        resolver.resolve(withTimeout: 5.0)
+    }
+
+    private func notifyLostWatchedServices(currentKeys: Set<String>, watcher: TypeWatcher) {
+        let lostKeys = Set(watcher.knownServices.keys).subtracting(currentKeys)
+        for key in lostKeys {
+            guard let box = watcher.knownServices.removeValue(forKey: key) else { continue }
+            var entry: [String: Any] = [
+                "name": box.name,
+                "type": box.type,
+                "domain": box.domain,
+                "port": box.port
+            ]
+            if let hn = box.hostname { entry["hostname"] = hn }
+            if !box.hosts.isEmpty { entry["hosts"] = box.hosts }
+            if !box.txt.isEmpty { entry["txt"] = box.txt }
+            watchDelegate?.mdns(self, didLoseService: entry)
+        }
+    }
+    #endif
+
+    fileprivate func stopAllWatchers() {
+        for (_, watcher) in watchers {
+            #if canImport(Network)
+            if #available(iOS 12.0, *) {
+                watcher.nwBrowser?.cancel()
+                watcher.nwBrowser = nil
+            }
+            #endif
+            watcher.nsBrowser?.stop()
+            watcher.nsBrowser?.delegate = nil
+            watcher.nsBrowser = nil
+
+            for (svc, _) in watcher.resolveMap {
+                svc.stop()
+                svc.delegate = nil
+            }
+            watcher.resolveMap.removeAll()
+        }
+
+        for (svc, _) in watchResolveMap {
+            svc.stop()
+            svc.delegate = nil
+        }
+        watchResolveMap.removeAll()
+        watchers.removeAll()
+    }
+}
+
 // MARK: - Model
+
+/// Manages a single NWBrowser or NetServiceBrowser for one service type during watching.
+private final class TypeWatcher {
+    let serviceType: String
+    var knownServices: [String: ServiceBox] = [:]  // identityKey -> box
+    var resolveMap: [NetService: ServiceBox] = [:]
+
+    #if canImport(Network)
+    var nwBrowser: NWBrowser?
+    #endif
+    var nsBrowser: NetServiceBrowser?
+
+    init(serviceType: String) {
+        self.serviceType = serviceType
+    }
+}
 
 /// Mutable container while resolving a service.
 private final class ServiceBox: Hashable {
