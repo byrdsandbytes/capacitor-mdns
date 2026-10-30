@@ -37,6 +37,12 @@ class mDNS(
         const val PUBLISH_TIMEOUT_MS = 5000L
     }
 
+    /** Callback interface for watch events. */
+    interface WatchListener {
+        fun onServiceFound(service: MdnsService)
+        fun onServiceLost(name: String, type: String)
+    }
+
     /** Normalized service representation returned to the bridge. */
     data class MdnsService(
         val name: String,
@@ -63,6 +69,16 @@ class mDNS(
     /** Keep strong references to listeners so they outlive registration/discovery. */
     private var activeRegistration: RegistrationSession? = null
     private val discListenerRef = AtomicReference<NsdManager.DiscoveryListener?>(null)
+
+    /** Listener for watch events (set by the plugin). */
+    var watchListener: WatchListener? = null
+
+    /** Active discovery listeners, one per watched service type. */
+    private val activeWatchers = mutableMapOf<String, NsdManager.DiscoveryListener>()
+    /** Service info callbacks for watched services (API 34+). */
+    private val watchServiceInfoCallbacks = mutableListOf<NsdManager.ServiceInfoCallback>()
+    /** Known services per type for dedup. key = "name|type" */
+    private val watchedServices = mutableMapOf<String, MdnsService>()
 
     /** Optional external scope (from plugin); otherwise create our own on Main. */
     private val scope = externalScope ?: CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -307,11 +323,59 @@ class mDNS(
     } }
 
     /**
+     * Start watching for multiple service types simultaneously.
+     * Calls [WatchListener.onServiceFound] and [WatchListener.onServiceLost] as services appear/disappear.
+     *
+     * @param typesRaw List of service types to watch.
+     * @return Number of watchers successfully started.
+     */
+    fun watchServices(typesRaw: List<String>): Int {
+        // Stop any existing watchers first
+        stopWatching()
+
+        var started = 0
+        for (rawType in typesRaw) {
+            val type = if (rawType.endsWith(".")) rawType else "$rawType."
+            if (type.isBlank()) continue
+            if (activeWatchers.containsKey(type)) continue  // already watching this type
+
+            val listener = createWatchDiscoveryListener(type)
+            activeWatchers[type] = listener
+            try {
+                nsd.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, listener)
+                started++
+            } catch (t: Throwable) {
+                activeWatchers.remove(type)
+            }
+        }
+        return started
+    }
+
+    /**
+     * Stop all active service watchers.
+     */
+    fun stopWatching() {
+        // Unregister service info callbacks (API 34+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            watchServiceInfoCallbacks.toList().forEach { safeUnregisterServiceInfoCallback(it) }
+        }
+        watchServiceInfoCallbacks.clear()
+
+        // Stop all discovery listeners
+        for ((_, listener) in activeWatchers) {
+            safeStopDiscovery(listener)
+        }
+        activeWatchers.clear()
+        watchedServices.clear()
+    }
+
+    /**
      * Close the manager and release any outstanding NSD listeners.
      * Safe to call multiple times; also invoked by the plugin's handleOnDestroy().
      */
     fun close() {
         runOnMain {
+            stopWatching()
             stopActiveRegistration("mDNS manager closed before publish completed")
             discListenerRef.getAndSet(null)?.let { safeStopDiscovery(it) }
         }
@@ -319,6 +383,77 @@ class mDNS(
     }
 
     // ---- Internal helpers ----------------------------------------------------
+
+    private fun createWatchDiscoveryListener(type: String): NsdManager.DiscoveryListener {
+        return object : NsdManager.DiscoveryListener {
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                activeWatchers.remove(type)
+            }
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) { /* no-op */ }
+            override fun onDiscoveryStarted(serviceType: String) { /* no-op */ }
+            override fun onDiscoveryStopped(serviceType: String) { /* no-op */ }
+
+            override fun onServiceFound(si: NsdServiceInfo) {
+                resolveWatchedService(si)
+            }
+
+            override fun onServiceLost(si: NsdServiceInfo) {
+                val key = "${si.serviceName}|${si.serviceType}"
+                val removed = watchedServices.remove(key)
+                if (removed != null) {
+                    watchListener?.onServiceLost(removed.name, removed.type)
+                } else {
+                    // Even without a resolved record, notify with raw info
+                    watchListener?.onServiceLost(si.serviceName, si.serviceType)
+                }
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun resolveWatchedService(si: NsdServiceInfo) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val callback = object : NsdManager.ServiceInfoCallback {
+                override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) { /* ignore */ }
+                override fun onServiceInfoCallbackUnregistered() { /* no-op */ }
+                override fun onServiceLost() { /* handled by discovery listener */ }
+
+                override fun onServiceUpdated(serviceInfo: NsdServiceInfo) {
+                    val service = toMdnsService(serviceInfo)
+                    val key = "${service.name}|${service.type}"
+                    val isNew = !watchedServices.containsKey(key)
+                    watchedServices[key] = service
+                    if (isNew) {
+                        watchListener?.onServiceFound(service)
+                    }
+                    // Unregister after first successful resolve to avoid repeated callbacks
+                    safeUnregisterServiceInfoCallback(this)
+                    watchServiceInfoCallbacks.remove(this)
+                }
+            }
+            watchServiceInfoCallbacks.add(callback)
+            try {
+                nsd.registerServiceInfoCallback(si, mainExecutor, callback)
+            } catch (_: Throwable) {
+                watchServiceInfoCallbacks.remove(callback)
+            }
+        } else {
+            try {
+                nsd.resolveService(si, object : NsdManager.ResolveListener {
+                    override fun onResolveFailed(s: NsdServiceInfo, errorCode: Int) { /* ignore */ }
+                    override fun onServiceResolved(s: NsdServiceInfo) {
+                        val service = toMdnsService(s)
+                        val key = "${service.name}|${service.type}"
+                        val isNew = !watchedServices.containsKey(key)
+                        watchedServices[key] = service
+                        if (isNew) {
+                            watchListener?.onServiceFound(service)
+                        }
+                    }
+                })
+            } catch (_: Throwable) { /* ignore */ }
+        }
+    }
 
     /** Best-effort unregister; NSD may throw if already unregistered. */
     private fun safeUnregister(l: NsdManager.RegistrationListener) {
